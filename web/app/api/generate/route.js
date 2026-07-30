@@ -1,11 +1,15 @@
 // Public, no-auth generation endpoint: turns a plain-English description into
-// a flow JSON using a server-side xAI key, so visitors never need one of
+// a flow JSON using a server-side Gemini key, so visitors never need one of
 // their own. Best-effort per-instance rate limit only (no external store) —
 // see web/README.md for what that does and doesn't cover.
 export const runtime = 'nodejs';
 
-const XAI_BASE_URL = 'https://api.x.ai/v1';
-const MODEL = 'grok-4.5';
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const MODEL = 'gemini-2.5-flash';
+
+// Canonical name is GEMINI_API_KEY; GOOGLE_API_KEY is accepted because Google's
+// own tooling uses that name and it's an easy one to have set instead.
+const apiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 const MAX_DESCRIPTION_CHARS = 4000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 8;
@@ -71,8 +75,8 @@ export async function POST(req) {
     return Response.json({ error: 'Too many requests from this address. Wait a minute and try again.' }, { status: 429 });
   }
 
-  if (!process.env.XAI_API_KEY) {
-    return Response.json({ error: 'Server is not configured yet: XAI_API_KEY is missing.' }, { status: 500 });
+  if (!apiKey()) {
+    return Response.json({ error: 'Server is not configured yet: GEMINI_API_KEY is missing.' }, { status: 500 });
   }
 
   let body;
@@ -93,19 +97,18 @@ export async function POST(req) {
 
   let res;
   try {
-    res = await fetch(XAI_BASE_URL + '/chat/completions', {
+    res = await fetch(`${GEMINI_BASE_URL}/models/${MODEL}:generateContent`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'authorization': 'Bearer ' + process.env.XAI_API_KEY
+        'x-goog-api-key': apiKey()
       },
       body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 4096,
-        messages: [
-          { role: 'system', content: RULES },
-          { role: 'user', content: userPrompt }
-        ]
+        systemInstruction: { parts: [{ text: RULES }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        // responseMimeType makes Gemini emit bare JSON, so the reply does not
+        // arrive wrapped in prose or markdown fences.
+        generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 }
       }),
       signal: AbortSignal.timeout(30_000)
     });
@@ -119,7 +122,7 @@ export async function POST(req) {
   }
 
   const data = await res.json();
-  const raw = data.choices?.[0]?.message?.content || '';
+  const raw = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
   const jsonText = extractJson(raw);
 
   let flow;
