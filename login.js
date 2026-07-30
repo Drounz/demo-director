@@ -1,7 +1,7 @@
 // One-time auth capture. Opens a real browser, you log in by hand, then it
 // saves the session to auth.json so the player runs already-logged-in.
 //
-//   node login.js https://your-prospector-url
+//   node login.js https://your-app-address-here
 //
 const { chromium } = require('playwright');
 
