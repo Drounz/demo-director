@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 380px; margin: 0; padding: 14px; background: #111827; color: #f9fafb;
+           font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+    h1 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+    textarea { width: 100%; height: 240px; box-sizing: border-box; resize: vertical;
+               background: #1f2937; color: #e5e7eb; border: 1px solid #374151;
+               border-radius: 8px; padding: 8px; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    button { flex: 1; padding: 8px 0; border: 0; border-radius: 8px; font-weight: 600;
+             font-size: 13px; cursor: pointer; }
+    #record { background: #3b82f6; color: #fff; }
+    #record:hover { background: #2563eb; }
+    #stop { background: #374151; color: #f9fafb; }
+    #stop:hover { background: #4b5563; }
+    #status { margin-top: 10px; min-height: 18px; color: #9ca3af; word-break: break-word; }
+    #status.error { color: #f87171; }
+    .hint { margin-top: 8px; color: #6b7280; font-size: 11.5px; }
+  </style>
+</head>
+<body>
+  <h1>Demo Director</h1>
+  <textarea id="flow" spellcheck="false"
+    placeholder='Paste a flow JSON here, e.g. { "name": "my-demo", "baseUrl": "...", "steps": [...] }'></textarea>
+  <div class="row">
+    <button id="record">Record</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div id="status"></div>
+  <div class="hint">Recording captures this tab. Keep it focused while the demo plays.
+    The video downloads as &lt;name&gt;.webm when the flow finishes.</div>
+  <script src="popup.js"></script>
+</body>
+</html>

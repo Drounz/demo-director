@@ -1,0 +1,24 @@
+{
+  "name": "my-demo",
+  "baseUrl": "https://your-app-address-here",
+  "viewport": { "width": 1280, "height": 720 },
+  "defaults": { "moveMs": 900, "typeDelay": 55, "pauseMs": 800 },
+
+  "_comment": "Same schema as the Playwright tool's flow.json, minus storageState/headless/outDir (this player runs in your own logged-in tab and downloads via chrome.downloads, so none of those apply). Only the FIRST step may be a goto — after that, stay on the same page and drive it with in-app clicks, since a full-page navigation reloads the tab and drops the injected content script. Replace baseUrl and every selector below with real ones from your app.",
+
+  "steps": [
+    { "action": "goto", "url": "/" },
+    { "action": "caption", "text": "A quick tour of the app.", "ms": 2600 },
+
+    { "action": "caption", "text": "We start by creating a new record.", "ms": 2200 },
+    { "action": "click", "selector": "text=New" },
+    { "action": "type", "selector": "input[name='name']", "text": "Example record" },
+    { "action": "click", "selector": "text=Save" },
+
+    { "action": "caption", "text": "The app processes it in the background.", "ms": 2600 },
+    { "action": "wait", "selector": "text=Ready", "timeout": 30000 },
+    { "action": "highlight", "selector": "text=Ready", "ms": 1800, "keep": true },
+
+    { "action": "caption", "text": "Created, processed, ready to review.", "ms": 2400 }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Demo Director",
+  "version": "0.1.0",
+  "description": "Plays a scripted UI demo in your logged-in browser with an animated cursor and captions, recording the tab to a .webm video.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Demo Director",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "tabCapture",
+    "offscreen",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": ["<all_urls>"]
+}
