@@ -3,28 +3,64 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { width: 380px; margin: 0; padding: 14px; background: #111827; color: #f9fafb;
+    body { width: 420px; margin: 0; padding: 14px; background: #111827; color: #f9fafb;
            font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
-    h1 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
-    textarea { width: 100%; height: 240px; box-sizing: border-box; resize: vertical;
+    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    h2 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+         color: #93c5fd; font-weight: 700; }
+    p.lead { margin: 0 0 10px; color: #9ca3af; font-size: 11.5px; }
+    label { display: block; font-size: 11.5px; color: #9ca3af; margin: 6px 0 3px; }
+    input[type="password"], input[type="text"] {
+      width: 100%; box-sizing: border-box; background: #1f2937; color: #e5e7eb;
+      border: 1px solid #374151; border-radius: 8px; padding: 7px 8px;
+      font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    }
+    textarea { width: 100%; box-sizing: border-box; resize: vertical;
                background: #1f2937; color: #e5e7eb; border: 1px solid #374151;
                border-radius: 8px; padding: 8px; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; }
-    .row { display: flex; gap: 8px; margin-top: 10px; }
+    #description { height: 70px; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #flow { height: 170px; }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
     button { flex: 1; padding: 8px 0; border: 0; border-radius: 8px; font-weight: 600;
              font-size: 13px; cursor: pointer; }
+    #generate { background: #7c3aed; color: #fff; }
+    #generate:hover { background: #6d28d9; }
+    #generate:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
     #record { background: #3b82f6; color: #fff; }
     #record:hover { background: #2563eb; }
     #stop { background: #374151; color: #f9fafb; }
     #stop:hover { background: #4b5563; }
-    #status { margin-top: 10px; min-height: 18px; color: #9ca3af; word-break: break-word; }
-    #status.error { color: #f87171; }
-    .hint { margin-top: 8px; color: #6b7280; font-size: 11.5px; }
+    #genStatus, #status { margin-top: 8px; min-height: 16px; color: #9ca3af; font-size: 12px; word-break: break-word; }
+    #genStatus.error, #status.error { color: #f87171; }
+    #genStatus.ok, #status.ok { color: #34d399; }
+    #shotList { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #d1d5db; }
+    #shotList li { margin-bottom: 3px; }
+    .hint { margin-top: 10px; color: #6b7280; font-size: 11px; }
+    hr { border: 0; border-top: 1px solid #1f2937; margin: 14px 0; }
   </style>
 </head>
 <body>
   <h1>Demo Director</h1>
+  <p class="lead">Describe the flow on the page you have open. The extension reads the real
+    elements on this tab and only ever uses selectors confirmed to exist.</p>
+
+  <label for="apiKey">Gemini API key (saved on this device only)</label>
+  <input type="password" id="apiKey" autocomplete="off" placeholder="AIza...">
+
+  <h2>1 · Describe the flow</h2>
+  <textarea id="description" spellcheck="false"
+    placeholder='e.g. "Click the button that starts a new radar configuration, wait for it to load, then highlight the result."'></textarea>
+  <div class="row">
+    <button id="generate">Generate from this page</button>
+  </div>
+  <div id="genStatus"></div>
+  <ol id="shotList" hidden></ol>
+
+  <hr>
+
+  <h2>2 · Review &amp; record</h2>
   <textarea id="flow" spellcheck="false"
-    placeholder='Paste a flow JSON here, e.g. { "name": "my-demo", "baseUrl": "...", "steps": [...] }'></textarea>
+    placeholder='Generated flow JSON appears here — or paste one directly, e.g. { "name": "my-demo", "baseUrl": "...", "steps": [...] }'></textarea>
   <div class="row">
     <button id="record">Record</button>
     <button id="stop">Stop</button>

@@ -13,16 +13,46 @@ tab — no separate login step — and records the tab to a `.webm` file.
 
 No build step: it's plain HTML/JS, loaded as-is.
 
+## Generate a flow from the page (primary path)
+
+Instead of authoring a flow JSON separately and pasting it in, the popup can
+write one for you from the page you already have open:
+
+1. Get a free Gemini API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+   and paste it into the **Gemini API key** field in the popup. It's saved to
+   `chrome.storage.local` (this device only), so you only paste it once.
+2. Open the tab you want to demo and get it to the screen where the flow
+   starts (you're already logged in, since this is your normal browser).
+3. Click the Demo Director icon, describe the flow in plain English in the
+   **1 · Describe the flow** box (e.g. *"click the button that starts a new
+   radar configuration, wait for it to load, then highlight the result"*), and
+   click **Generate from this page**.
+4. The extension reads every visible button, link, input, and heading on the
+   current page — each with its real, confirmed-present selector (preferring
+   `id`/`data-testid`/`aria-label`, falling back to a structural CSS path) —
+   and sends that list plus your description to Gemini. Gemini matches your
+   words to those real elements and returns a flow JSON; it is never allowed to
+   invent a selector that isn't in the list Gemini was given. If it tries
+   anyway, the popup strips that step rather than keep an unconfirmed
+   selector, and tells you what it dropped.
+5. A shot list appears so you can sanity-check the steps before recording. The
+   full JSON is also in the **2 · Review & record** box below it — editable,
+   in case you want to tweak a caption or timing by hand.
+
+**Limitation:** the scan only sees what's on the page *right now*. If your
+description mentions something that appears later (after a click, after
+async processing), there's no real selector for it yet at generation time —
+Gemini is instructed to fall back to a fixed-delay `wait` for those, which is
+weaker than a selector-based wait. Regenerating after the awaited element is
+actually visible (or hand-editing that one step) gives you the real selector.
+
 ## Record a demo
 
-1. Open the tab you want to demo and navigate it to wherever your flow's first
-   `goto` expects to land (you're already logged in, since this is your normal
-   browser).
-2. Click the Demo Director icon, paste your flow JSON into the textarea (see
-   `flow.sample.json`), and click **Record**.
-3. The popup closes; the tab starts recording and the flow plays out with the
+1. Once you have a flow — generated above, or pasted directly (see
+   `flow.sample.json`) — click **Record**.
+2. The popup closes; the tab starts recording and the flow plays out with the
    animated cursor, ripples, captions, and highlights.
-4. When the flow finishes, the video downloads automatically as
+3. When the flow finishes, the video downloads automatically as
    `<name>.webm`. You can also click **Stop** at any time to end early and keep
    whatever was recorded so far.
 
@@ -97,15 +127,17 @@ for cases where a hard reload is actually part of what you want to show.
 
 ## Permissions
 
-- `activeTab`, `tabs`, `scripting` — inject the player into your current tab
-  and navigate it.
+- `activeTab`, `tabs`, `scripting` — inject the player (and the page-element
+  scan) into your current tab, and navigate it.
 - `tabCapture` — capture the tab's video for recording.
 - `offscreen` — MV3 service workers can't run `MediaRecorder`, so recording
   happens in a hidden offscreen document instead.
 - `downloads` — save the finished video.
-- `storage` — keep the flow JSON you pasted (`chrome.storage.local`) and the
-  live run status (`chrome.storage.session`) across popup opens.
-- `host_permissions: <all_urls>` — the flow can target any app you own.
+- `storage` — keep the flow JSON (`chrome.storage.local`), your Gemini API key
+  (`chrome.storage.local`, this device only), and the live run status
+  (`chrome.storage.session`) across popup opens.
+- `host_permissions: <all_urls>` — the flow can target any app you own, and it's
+  also what lets the popup call the Gemini API directly without a CORS error.
 
 ## Notes
 
