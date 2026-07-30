@@ -1,10 +1,11 @@
 // Public, no-auth generation endpoint: turns a plain-English description into
-// a flow JSON using a server-side Anthropic key, so visitors never need one of
+// a flow JSON using a server-side xAI key, so visitors never need one of
 // their own. Best-effort per-instance rate limit only (no external store) —
 // see web/README.md for what that does and doesn't cover.
 export const runtime = 'nodejs';
 
-const MODEL = 'claude-sonnet-5';
+const XAI_BASE_URL = 'https://api.x.ai/v1';
+const MODEL = 'grok-4.5';
 const MAX_DESCRIPTION_CHARS = 4000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 8;
@@ -70,8 +71,8 @@ export async function POST(req) {
     return Response.json({ error: 'Too many requests from this address. Wait a minute and try again.' }, { status: 429 });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return Response.json({ error: 'Server is not configured yet: ANTHROPIC_API_KEY is missing.' }, { status: 500 });
+  if (!process.env.XAI_API_KEY) {
+    return Response.json({ error: 'Server is not configured yet: XAI_API_KEY is missing.' }, { status: 500 });
   }
 
   let body;
@@ -92,18 +93,19 @@ export async function POST(req) {
 
   let res;
   try {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
+    res = await fetch(XAI_BASE_URL + '/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'authorization': 'Bearer ' + process.env.XAI_API_KEY
       },
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 4096,
-        system: RULES,
-        messages: [{ role: 'user', content: userPrompt }]
+        messages: [
+          { role: 'system', content: RULES },
+          { role: 'user', content: userPrompt }
+        ]
       }),
       signal: AbortSignal.timeout(30_000)
     });
@@ -117,7 +119,7 @@ export async function POST(req) {
   }
 
   const data = await res.json();
-  const raw = (data.content || []).map(b => b.text || '').join('');
+  const raw = data.choices?.[0]?.message?.content || '';
   const jsonText = extractJson(raw);
 
   let flow;
