@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow Author — Demo Director</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 20px 60px; background: #0b0f19; color: #e5e7eb;
+    font: 14px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #9ca3af; margin: 0 0 24px; font-size: 13px; }
+  section { background: #111827; border: 1px solid #1f2937; border-radius: 12px;
+            padding: 18px 20px; margin-bottom: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+               color: #93c5fd; margin: 0 0 12px; }
+  label { display: block; font-size: 12.5px; color: #9ca3af; margin: 10px 0 4px; }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=password], textarea, select {
+    width: 100%; background: #1f2937; color: #f3f4f6; border: 1px solid #374151;
+    border-radius: 8px; padding: 8px 10px; font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  }
+  input[type=text]:focus, input[type=password]:focus, textarea:focus, select:focus {
+    outline: 2px solid #3b82f6; outline-offset: -1px;
+  }
+  textarea { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; resize: vertical; }
+  #description { height: 130px; }
+  #output { height: 260px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  .row2 { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  button { border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 600;
+           font-size: 13px; cursor: pointer; }
+  .primary { background: #3b82f6; color: #fff; }
+  .primary:hover { background: #2563eb; }
+  .primary:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+  .ghost { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
+  .ghost:hover { background: #263041; }
+  .danger { background: transparent; color: #f87171; border: 1px solid #7f1d1d; }
+  .danger:hover { background: #1f1315; }
+  #status { margin-top: 10px; min-height: 18px; font-size: 12.5px; color: #9ca3af; }
+  #status.error { color: #f87171; }
+  #status.ok { color: #34d399; }
+  .hint { color: #6b7280; font-size: 11.5px; margin-top: 8px; }
+  .field-note { color: #6b7280; font-size: 11.5px; margin-top: 2px; }
+  code { background: #1f2937; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Flow Author</h1>
+  <p class="sub">Describe a demo in plain English. Get a flow.json for the Demo Director
+    extension. Lightweight mode: selectors are written as <code>text=</code>/<code>role=</code>
+    matches on visible labels — this page never sees or needs your app's HTML.</p>
+
+  <section>
+    <h2>1 · Generation method</h2>
+    <label for="provider">How should this page produce the flow JSON?</label>
+    <select id="provider">
+      <option value="none">Copy a prompt instead (no API key — paste into Claude Code or claude.ai)</option>
+      <option value="claude">Call Claude (Anthropic API)</option>
+      <option value="gemini">Call Google Gemini API</option>
+      <option value="xai">Call xAI (Grok) API</option>
+    </select>
+
+    <div id="keyFields" style="display:none">
+      <div class="row">
+        <div>
+          <label id="keyLabel" for="apiKey">API key</label>
+          <input type="password" id="apiKey" autocomplete="off" placeholder="sk-...">
+        </div>
+        <div>
+          <label id="modelLabel" for="modelId">Model</label>
+          <input type="text" id="modelId">
+        </div>
+      </div>
+      <p class="field-note">Saved to this browser's local storage so you only paste it once.
+        Nothing is sent anywhere except directly to the provider you pick, from this page.</p>
+    </div>
+    <div class="row2">
+      <button class="danger" id="clearKeys" type="button">Clear saved keys</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · The app</h2>
+    <div class="row">
+      <div>
+        <label for="flowName">Name (used for the output filename)</label>
+        <input type="text" id="flowName" value="my-demo">
+      </div>
+      <div>
+        <label for="baseUrl">Base URL (what you type in the browser to reach it)</label>
+        <input type="text" id="baseUrl" placeholder="https://your-app-address-here">
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · The flow, in plain English</h2>
+    <label for="description">Mention button/link labels and field names as they actually
+      appear on screen — that wording becomes the selectors.</label>
+    <textarea id="description" placeholder="Example: Start on the leads page. Click the &quot;New lead&quot; button. Type &quot;Acme Distribution Ltd&quot; into the company name field. Click &quot;Save&quot;. Wait for the &quot;Enriched&quot; status to appear and highlight it. Then wait for a grade badge and highlight it too."></textarea>
+    <div class="row2">
+      <button class="primary" id="generate" type="button">Generate flow JSON</button>
+      <button class="ghost" id="copyPrompt" type="button">Copy prompt instead</button>
+    </div>
+    <div id="status"></div>
+  </section>
+
+  <section>
+    <h2>4 · Result</h2>
+    <textarea id="output" spellcheck="false" placeholder="Generated flow.json will appear here, ready to paste into the extension's Record popup."></textarea>
+    <div class="row2">
+      <button class="ghost" id="copyOutput" type="button">Copy JSON</button>
+    </div>
+    <p class="hint">Direct API calls run entirely in this page (no server). If a provider blocks
+      the request (CORS, network), use "Copy prompt instead" and paste into Claude Code or
+      claude.ai by hand — same result, one extra step.</p>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const providerSel = $('provider'), keyFields = $('keyFields'), apiKeyEl = $('apiKey'),
+        modelEl = $('modelId'), keyLabelEl = $('keyLabel'), modelLabelEl = $('modelLabel'),
+        statusEl = $('status'), outputEl = $('output');
+
+  const PROVIDERS = {
+    claude: {
+      label: 'Anthropic API key', defaultModel: 'claude-sonnet-5',
+      async call(apiKey, model, systemPrompt, userPrompt) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          },
+          body: JSON.stringify({
+            model, max_tokens: 4096,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }]
+          })
+        });
+        if (!res.ok) throw new Error('Claude API ' + res.status + ': ' + await safeText(res));
+        const data = await res.json();
+        return (data.content || []).map(b => b.text || '').join('');
+      }
+    },
+    gemini: {
+      label: 'Google AI API key', defaultModel: 'gemini-2.5-flash',
+      async call(apiKey, model, systemPrompt, userPrompt) {
+        const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+          + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: userPrompt }] }]
+          })
+        });
+        if (!res.ok) throw new Error('Gemini API ' + res.status + ': ' + await safeText(res));
+        const data = await res.json();
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        return parts.map(p => p.text || '').join('');
+      }
+    },
+    xai: {
+      label: 'xAI API key', defaultModel: 'grok-4',
+      async call(apiKey, model, systemPrompt, userPrompt) {
+        const res = await fetch('https://api.x.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + apiKey },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ]
+          })
+        });
+        if (!res.ok) throw new Error('xAI API ' + res.status + ': ' + await safeText(res));
+        const data = await res.json();
+        return data.choices?.[0]?.message?.content || '';
+      }
+    }
+  };
+
+  async function safeText(res) {
+    try { return (await res.text()).slice(0, 400); } catch { return res.statusText; }
+  }
+
+  // ---- persistence: only provider choice + per-provider key/model, nothing else
+  function loadProviderSettings(p) {
+    apiKeyEl.value = localStorage.getItem('flowAuthor.key.' + p) || '';
+    modelEl.value = localStorage.getItem('flowAuthor.model.' + p) || PROVIDERS[p].defaultModel;
+    keyLabelEl.textContent = PROVIDERS[p].label;
+    modelLabelEl.textContent = 'Model';
+  }
+  function onProviderChange() {
+    const p = providerSel.value;
+    localStorage.setItem('flowAuthor.provider', p);
+    if (p === 'none') { keyFields.style.display = 'none'; return; }
+    keyFields.style.display = '';
+    loadProviderSettings(p);
+  }
+  providerSel.value = localStorage.getItem('flowAuthor.provider') || 'none';
+  onProviderChange();
+  providerSel.addEventListener('change', onProviderChange);
+  apiKeyEl.addEventListener('change', () => {
+    if (providerSel.value !== 'none') localStorage.setItem('flowAuthor.key.' + providerSel.value, apiKeyEl.value);
+  });
+  modelEl.addEventListener('change', () => {
+    if (providerSel.value !== 'none') localStorage.setItem('flowAuthor.model.' + providerSel.value, modelEl.value);
+  });
+  $('clearKeys').addEventListener('click', () => {
+    for (const p of Object.keys(PROVIDERS)) {
+      localStorage.removeItem('flowAuthor.key.' + p);
+      localStorage.removeItem('flowAuthor.model.' + p);
+    }
+    if (providerSel.value !== 'none') loadProviderSettings(providerSel.value);
+    setStatus('Saved keys cleared.', 'ok');
+  });
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text || '';
+    statusEl.className = kind || '';
+  }
+
+  // ---- the shared brief (used both for direct API calls and the copy-prompt fallback) ----
+  const SCHEMA = `{ name, baseUrl, viewport?: {width,height}, defaults: {moveMs,typeDelay,pauseMs}, steps: [] }`;
+  const RULES = `Output ONLY a single JSON object matching this shape, no prose, no markdown fences:
+${SCHEMA}
+
+Each step has an "action" of one of: goto {url}, caption {text, ms}, click {selector},
+type {selector, text, clear?}, hover {selector}, highlight {selector, ms, keep?},
+scrollTo {selector}, wait {selector?, ms?, timeout?}, press {key}.
+
+Rules:
+- Lightweight mode: selectors must be "text=<visible label>" (match by visible text) or
+  "role=<button|link|textbox|checkbox>". Never invent a data-testid or a CSS class — you were
+  not given the app's HTML, so only use wording the description actually mentions.
+- Only the FIRST step in the whole flow may be a "goto". Everything after it must stay on that
+  same page and use in-app clicks/typing — a full-page navigation restarts the player.
+- Put a short caption before each meaningful action so the recording narrates itself.
+- Pace it slowly: moveMs around 900, pauseMs around 800, typeDelay around 55 (these are the
+  defaults; only override per-step if the description implies a different pace).
+- Add a "wait" step (with a selector and a generous timeout, e.g. 20000-30000ms) immediately
+  before interacting with or highlighting anything the description says loads, processes, or
+  appears asynchronously — so playback never races ahead of the real app.`;
+
+  function buildUserPrompt() {
+    const name = $('flowName').value.trim() || 'my-demo';
+    const baseUrl = $('baseUrl').value.trim() || 'https://your-app-address-here';
+    const description = $('description').value.trim();
+    return `App name: ${name}\nBase URL: ${baseUrl}\n\nHere is the flow:\n${description || '(nothing described yet)'}`;
+  }
+
+  function extractJson(text) {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    return (fenced ? fenced[1] : text).trim();
+  }
+
+  const ALLOWED_ACTIONS = new Set(['goto','caption','click','type','hover','highlight','scrollTo','wait','press']);
+
+  function validateFlow(flow) {
+    const problems = [];
+    if (!Array.isArray(flow.steps) || !flow.steps.length) problems.push('"steps" is missing or empty');
+    (flow.steps || []).forEach((s, i) => {
+      if (!ALLOWED_ACTIONS.has(s.action)) problems.push(`step ${i + 1}: unknown action "${s.action}"`);
+      if (s.action === 'goto' && i !== 0) problems.push(`step ${i + 1}: goto appears after step 1 — will reload the player mid-flow`);
+    });
+    return problems;
+  }
+
+  $('generate').addEventListener('click', async () => {
+    const provider = providerSel.value;
+    if (provider === 'none') {
+      setStatus('Pick a provider above, or use "Copy prompt instead".', 'error');
+      return;
+    }
+    if (!$('description').value.trim()) {
+      setStatus('Describe the flow first.', 'error');
+      return;
+    }
+    const apiKey = apiKeyEl.value.trim();
+    const model = modelEl.value.trim() || PROVIDERS[provider].defaultModel;
+    if (!apiKey) { setStatus('Enter an API key for ' + provider + ', or switch to "Copy prompt instead".', 'error'); return; }
+
+    $('generate').disabled = true;
+    setStatus('Calling ' + provider + '…');
+    try {
+      const raw = await PROVIDERS[provider].call(apiKey, model, RULES, buildUserPrompt());
+      const jsonText = extractJson(raw);
+      let flow;
+      try {
+        flow = JSON.parse(jsonText);
+      } catch (e) {
+        outputEl.value = raw;
+        setStatus('Response was not valid JSON — showing the raw reply below so you can fix it by hand.', 'error');
+        return;
+      }
+      // Deterministic overrides: don't rely on the model for fields we already know.
+      flow.name = $('flowName').value.trim() || flow.name || 'my-demo';
+      flow.baseUrl = $('baseUrl').value.trim() || flow.baseUrl || 'https://your-app-address-here';
+      flow.defaults = Object.assign({ moveMs: 900, typeDelay: 55, pauseMs: 800 }, flow.defaults || {});
+
+      const problems = validateFlow(flow);
+      outputEl.value = JSON.stringify(flow, null, 2);
+      if (problems.length) {
+        setStatus('Generated, but check: ' + problems.join('; '), 'error');
+      } else {
+        setStatus('Generated ' + flow.steps.length + ' steps. Copy the JSON below into the extension popup.', 'ok');
+      }
+    } catch (e) {
+      setStatus('Failed: ' + e.message + ' — try "Copy prompt instead".', 'error');
+    } finally {
+      $('generate').disabled = false;
+    }
+  });
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    }
+  }
+
+  $('copyPrompt').addEventListener('click', async () => {
+    if (!$('description').value.trim()) { setStatus('Describe the flow first.', 'error'); return; }
+    const full = `You are writing a flow spec for my Demo Director browser extension.\n\n${RULES}\n\n${buildUserPrompt()}`;
+    const ok = await copyText(full);
+    setStatus(ok ? 'Prompt copied — paste into Claude Code or claude.ai, then paste its JSON reply into the Result box below.' : 'Copy failed — select the text manually.', ok ? 'ok' : 'error');
+  });
+
+  $('copyOutput').addEventListener('click', async () => {
+    if (!outputEl.value.trim()) { setStatus('Nothing to copy yet.', 'error'); return; }
+    const ok = await copyText(outputEl.value);
+    setStatus(ok ? 'JSON copied — paste it into the extension popup.' : 'Copy failed — select the text manually.', ok ? 'ok' : 'error');
+  });
+})();
+</script>
+</body>
+</html>
