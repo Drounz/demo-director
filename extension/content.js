@@ -26,6 +26,11 @@
         #__demo_caption.show{opacity:1}
         #__demo_caption.error{background:rgba(153,27,27,.95)}
         .__demo_hl{outline:3px solid rgba(59,130,246,.95)!important;outline-offset:2px;border-radius:6px}
+        #__demo_prompt{position:fixed;z-index:2147483647;pointer-events:none;max-width:260px;background:rgba(17,24,39,.96);color:#fff;font:500 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;padding:9px 12px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .2s ease}
+        #__demo_prompt.show{opacity:1}
+        #__demo_prompt.sensitive{background:rgba(120,53,15,.96)}
+        #__demo_prompt .__demo_count{font-weight:700;color:#93c5fd}
+        #__demo_prompt .__demo_skip{display:inline-block;margin-top:6px;color:#fca5a5;text-decoration:underline;cursor:pointer;pointer-events:auto}
       `;
       (document.head || root).appendChild(st);
     }
@@ -41,6 +46,9 @@
     }
     if (!document.getElementById('__demo_caption')) {
       const cap = document.createElement('div'); cap.id = '__demo_caption'; root.appendChild(cap);
+    }
+    if (!document.getElementById('__demo_prompt')) {
+      const p = document.createElement('div'); p.id = '__demo_prompt'; root.appendChild(p);
     }
     state.ready = true;
     place(state.x, state.y);
@@ -80,6 +88,38 @@
     cap.classList.toggle('error', !!isError);
     if (!text) { cap.classList.remove('show'); return; }
     cap.textContent = text; cap.classList.add('show');
+  }
+
+  // Small floating prompt anchored near a field, used by the interactive
+  // type-step wait (real input / auto-fill countdown / skip).
+  function showPrompt(el, text, sensitive, onSkip) {
+    ensure();
+    const p = document.getElementById('__demo_prompt');
+    p.classList.toggle('sensitive', !!sensitive);
+    p.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.className = '__demo_prompt_msg';
+    msg.textContent = text;
+    p.appendChild(msg);
+    const skip = document.createElement('span');
+    skip.className = '__demo_skip';
+    skip.textContent = 'Skip this field';
+    skip.addEventListener('click', onSkip);
+    p.appendChild(skip);
+
+    const r = el.getBoundingClientRect();
+    let top = r.bottom + 8;
+    if (top + 70 > window.innerHeight) top = Math.max(8, r.top - 70);
+    let left = Math.min(Math.max(8, r.left), window.innerWidth - 268);
+    p.style.top = top + 'px';
+    p.style.left = left + 'px';
+    p.classList.add('show');
+    return { setText: t => { msg.textContent = t; } };
+  }
+
+  function hidePrompt() {
+    const p = document.getElementById('__demo_prompt');
+    if (p) p.classList.remove('show');
   }
 
   // ------------------------------------------------------- selector engine
@@ -212,6 +252,169 @@
     target.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
   }
 
+  const fieldValue = el => el.isContentEditable ? (el.textContent || '') : (el.value || '');
+
+  // Safety rule: never auto-generate a value for anything that looks like it
+  // wants real personal or financial data. Checked against the input type,
+  // autocomplete hint, and any text (name/id/placeholder/label) tied to the
+  // field — a false positive here just means one extra field the person has
+  // to type themselves, which is the safe direction to err in.
+  const SENSITIVE_TYPES = new Set(['password', 'email', 'tel']);
+  const SENSITIVE_AUTOCOMPLETE = /cc-|current-password|new-password|^email$|^tel|street-address|postal-code/;
+  const SENSITIVE_TEXT = /e-?mail|password|passwd|pwd|phone|telephone|mobile|ssn|social security|credit|card\s*number|\bcvv\b|\bcvc\b|cardholder|payment|billing|routing|iban|swift|account\s*number/;
+
+  function fieldLabel(el) {
+    if (el.id) {
+      const byFor = document.querySelector(`label[for="${(window.CSS && CSS.escape ? CSS.escape(el.id) : el.id)}"]`);
+      if (byFor) return norm(byFor.textContent);
+    }
+    const wrapping = el.closest('label');
+    if (wrapping) return norm(wrapping.textContent);
+    return '';
+  }
+
+  function nearbyHeading(el) {
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    let best = null;
+    for (const h of headings) {
+      if (el.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_PRECEDING) best = h;
+    }
+    return best ? norm(best.textContent) : '';
+  }
+
+  function fieldContext(el) {
+    return {
+      label: fieldLabel(el),
+      placeholder: el.getAttribute('placeholder') || '',
+      name: el.getAttribute('name') || el.id || '',
+      inputType: el.type || el.tagName.toLowerCase(),
+      nearbyHeading: nearbyHeading(el)
+    };
+  }
+
+  function isSensitiveField(el) {
+    const type = (el.type || '').toLowerCase();
+    if (SENSITIVE_TYPES.has(type)) return true;
+    const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (SENSITIVE_AUTOCOMPLETE.test(autocomplete)) return true;
+    const ctx = fieldContext(el);
+    const hay = [ctx.label, ctx.placeholder, ctx.name].join(' ').toLowerCase();
+    return SENSITIVE_TEXT.test(hay);
+  }
+
+  // Asks Gemini for one short, plausible demo value for a single field, using
+  // only field-local context (never the wider page or flow description).
+  // Returns null on any failure so the caller can fall back to asking the
+  // person to type it themselves instead of typing something wrong.
+  async function generateFieldValue(ctx) {
+    try {
+      const { geminiApiKey } = await chrome.storage.local.get('geminiApiKey');
+      if (!geminiApiKey) return null;
+      const prompt = `Field context:\nlabel: ${ctx.label || '(none)'}\nplaceholder: ${ctx.placeholder || '(none)'}\nname/id: ${ctx.name || '(none)'}\ninput type: ${ctx.inputType}\nnearby heading: ${ctx.nearbyHeading || '(none)'}`;
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': geminiApiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: 'You generate a single short, plausible DEMO value for one form field, for a screen recording. Output ONLY the value itself: no quotes, no explanation, no markdown. Keep it brief (a few words at most). This is placeholder demo content, never a real person\'s data.' }] },
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 60 }
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const text = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+      return text ? text.replace(/^["']|["']$/g, '') : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const AUTOFILL_COUNTDOWN_S = 5;
+  const TYPING_PAUSE_MS = 1500;
+
+  // The core of interactive typing: wait for either real keystrokes (resolve
+  // once the person pauses for TYPING_PAUSE_MS), a skip click, or — for
+  // non-sensitive fields only — the countdown running out. Real-input
+  // detection only listens during this wait and is torn down before any
+  // synthetic auto-fill typing starts, so our own dispatched events can never
+  // be mistaken for the person typing.
+  function waitForFieldValue(el, sensitive, indefiniteMessage) {
+    return new Promise(resolve => {
+      let settled = false;
+      let userTyping = false;
+      let countdownTimer = null;
+      let debounceTimer = null;
+      let remaining = AUTOFILL_COUNTDOWN_S;
+
+      const promptText = sensitive
+        ? (indefiniteMessage || 'Please enter this yourself (sensitive field)')
+        : `Type your own answer, or auto-fill in ${remaining}s`;
+      const prompt = showPrompt(el, promptText, sensitive, () => finish({ source: 'skip' }));
+
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        clearInterval(countdownTimer);
+        clearTimeout(debounceTimer);
+        el.removeEventListener('input', onInput);
+        hidePrompt();
+        resolve(result);
+      }
+      function onInput() {
+        if (!userTyping) {
+          userTyping = true;
+          clearInterval(countdownTimer);
+          prompt.setText('Waiting for you to finish typing…');
+        }
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => finish({ source: 'user', value: fieldValue(el) }), TYPING_PAUSE_MS);
+      }
+      el.addEventListener('input', onInput);
+
+      if (!sensitive) {
+        countdownTimer = setInterval(() => {
+          remaining -= 1;
+          if (remaining <= 0) { finish({ source: 'timeout' }); return; }
+          prompt.setText(`Type your own answer, or auto-fill in ${remaining}s`);
+        }, 1000);
+      }
+    });
+  }
+
+  // Interactive replacement for a plain scripted type: gives the person a
+  // window to type their own answer, auto-fills safe fields via Gemini if
+  // they don't, and never auto-fills anything that looks sensitive.
+  async function interactiveType(s, d) {
+    const { x, y, el } = await centerOf(s.selector);
+    await moveCursor(x, y, s.moveMs ?? d.moveMs);
+    clickPulse(x, y);
+    realClick(x, y, el);
+
+    const sensitive = isSensitiveField(el);
+    const result = await waitForFieldValue(el, sensitive);
+
+    if (result.source === 'skip') {
+      return { source: 'skipped', value: '' };
+    }
+    if (result.source === 'user') {
+      return { source: 'user', value: result.value };
+    }
+    // 'timeout' — only reachable for non-sensitive fields.
+    const ctx = fieldContext(el);
+    const generated = await generateFieldValue(ctx);
+    if (generated === null) {
+      // Generation failed (no key, network error, empty reply): degrade to
+      // an indefinite, clearly-labeled wait rather than typing nothing or
+      // guessing — same shape as the sensitive-field path, different message.
+      const fallback = await waitForFieldValue(el, true, 'Auto-fill unavailable — please enter this yourself');
+      if (fallback.source === 'skip') return { source: 'skipped', value: '' };
+      return { source: 'user', value: fallback.value };
+    }
+    await typeInto(el, generated, s.typeDelay ?? d.typeDelay, true);
+    return { source: 'auto', value: generated };
+  }
+
   // ----------------------------------------------------------- step engine
   let running = false;
 
@@ -243,7 +446,7 @@
   // register what just happened, even on a page that rendered instantly.
   const POST_CLICK_SETTLE_MS = 500;
 
-  async function exec(s, d) {
+  async function exec(s, d, index) {
     if (s.action === 'caption') {
       caption(s.text || '');
       await sleep(s.ms ?? 2000);
@@ -257,13 +460,15 @@
       await sleep(POST_CLICK_SETTLE_MS);
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'type') {
-      const { x, y, el } = await centerOf(s.selector);
-      await moveCursor(x, y, s.moveMs ?? d.moveMs);
-      clickPulse(x, y);
-      realClick(x, y, el);
-      await typeInto(el, s.text, s.typeDelay ?? d.typeDelay, !!s.clear);
-      await waitForQuiet();
-      await sleep(POST_CLICK_SETTLE_MS);
+      const result = await interactiveType(s, d);
+      chrome.runtime.sendMessage({
+        target: 'background', type: 'type-result', index,
+        selector: s.selector, source: result.source, value: result.value
+      }).catch(() => {});
+      if (result.source !== 'skipped') {
+        await waitForQuiet();
+        await sleep(POST_CLICK_SETTLE_MS);
+      }
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'hover') {
       const { x, y, el } = await centerOf(s.selector);
@@ -307,7 +512,7 @@
       for (let i = startIndex || 0; i < (steps || []).length; i++) {
         const s = steps[i];
         label = 'step ' + (i + 1) + ' (' + s.action + (s.selector ? ' ' + s.selector : '') + ')';
-        await exec(s, d);
+        await exec(s, d, i);
         // Fire-and-forget: if this step's click caused a full navigation, the
         // page (and this call) is about to be torn down anyway, so a failed
         // send here is expected and not an error worth surfacing.

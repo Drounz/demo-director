@@ -13,6 +13,7 @@ const descriptionEl = document.getElementById('description');
 const generateBtn = document.getElementById('generate');
 const genStatusEl = document.getElementById('genStatus');
 const shotListEl = document.getElementById('shotList');
+const runLogEl = document.getElementById('runLog');
 
 function showStatus(text) {
   statusEl.textContent = text || '';
@@ -24,16 +25,41 @@ function showGenStatus(text, kind) {
   genStatusEl.className = kind || '';
 }
 
+// Renders what got typed by the person vs auto-filled vs skipped on each
+// interactive type step, so it's reviewable after a recording — including
+// runs where the popup was closed the whole time, since this reads from the
+// persisted log rather than only live messages.
+function renderRunLog(entries) {
+  runLogEl.innerHTML = '';
+  for (const e of entries || []) {
+    const li = document.createElement('li');
+    li.className = e.source;
+    const label = e.source === 'user' ? 'you typed' : e.source === 'auto' ? 'auto-filled' : 'skipped';
+    const valueText = e.source === 'skipped' ? '' : ': "' + e.value + '"';
+    li.innerHTML = '<span class="src">step ' + (e.index + 1) + ' (' + label + ')</span>' + escapeHtml(valueText);
+    runLogEl.appendChild(li);
+  }
+  runLogEl.hidden = !(entries || []).length;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 (async () => {
   const { flowText, geminiApiKey } = await chrome.storage.local.get(['flowText', 'geminiApiKey']);
   if (flowText && !flowBox.value) flowBox.value = flowText;
   if (geminiApiKey) apiKeyEl.value = geminiApiKey;
-  const { status } = await chrome.storage.session.get('status');
+  const { status, runLog } = await chrome.storage.session.get(['status', 'runLog']);
   showStatus(status || '');
+  renderRunLog(runLog);
 })();
 
 chrome.storage.session.onChanged.addListener(changes => {
   if (changes.status) showStatus(changes.status.newValue || '');
+  if (changes.runLog) renderRunLog(changes.runLog.newValue);
 });
 
 apiKeyEl.addEventListener('change', () => {

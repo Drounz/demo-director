@@ -35,6 +35,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     stopRecording(true);
   } else if (msg.type === 'step-progress') {
     if (session) session.ackIndex = msg.index;
+  } else if (msg.type === 'type-result') {
+    logTypeResult(msg);
   } else if (msg.type === 'segment-done') {
     nextSegment().catch(e => fail(e.message));
   } else if (msg.type === 'flow-error') {
@@ -104,8 +106,18 @@ async function start(flow) {
     tabId: tab.id, flow, segments: splitSegments(flow.steps || []), seg: -1,
     ackIndex: -1, expectingNav: false, recovering: false, navRecoveries: 0
   };
+  await chrome.storage.session.set({ runLog: [] }); // fresh log for this recording
   await setStatus('recording…');
   await nextSegment();
+}
+
+// Appends one interactive-type outcome to the persisted run log, so the
+// popup can show which values were typed by the person vs auto-filled vs
+// skipped — including while the popup itself is closed during recording.
+async function logTypeResult(msg) {
+  const { runLog } = await chrome.storage.session.get('runLog');
+  const entry = { index: msg.index, selector: msg.selector, source: msg.source, value: msg.value };
+  await chrome.storage.session.set({ runLog: [...(runLog || []), entry] });
 }
 
 // [gotoA, s1, s2, gotoB, s3] -> [{goto:A, steps:[s1,s2]}, {goto:B, steps:[s3]}]

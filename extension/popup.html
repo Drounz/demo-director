@@ -35,6 +35,12 @@
     #genStatus.ok, #status.ok { color: #34d399; }
     #shotList { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #d1d5db; }
     #shotList li { margin-bottom: 3px; }
+    #runLog { margin: 8px 0 0; padding-left: 0; list-style: none; font-size: 12px; max-height: 140px; overflow-y: auto; }
+    #runLog li { margin-bottom: 4px; padding-left: 18px; position: relative; }
+    #runLog li.user::before { content: '\2713'; position: absolute; left: 0; color: #34d399; }
+    #runLog li.auto::before { content: '\2699'; position: absolute; left: 0; color: #a78bfa; }
+    #runLog li.skipped::before { content: '\23ED'; position: absolute; left: 0; color: #6b7280; }
+    #runLog .src { color: #6b7280; }
     .hint { margin-top: 10px; color: #6b7280; font-size: 11px; }
     hr { border: 0; border-top: 1px solid #1f2937; margin: 14px 0; }
   </style>
@@ -66,8 +72,11 @@
     <button id="stop">Stop</button>
   </div>
   <div id="status"></div>
+  <ol id="runLog" hidden></ol>
   <div class="hint">Recording captures this tab. Keep it focused while the demo plays.
-    The video downloads as &lt;name&gt;.webm when the flow finishes.</div>
+    The video downloads as &lt;name&gt;.webm when the flow finishes. On type steps, type
+    your own answer any time, or let it auto-fill safe fields after a countdown — sensitive
+    fields (email, password, phone, payment) always wait for you.</div>
   <script src="popup.js"></script>
 </body>
 </html>
