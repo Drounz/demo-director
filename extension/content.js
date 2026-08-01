@@ -215,6 +215,34 @@
   // ----------------------------------------------------------- step engine
   let running = false;
 
+  // "Not catching up" fix: a fixed delay after a click can't know whether a
+  // slow-rendering app has actually finished responding. Watch the DOM
+  // instead — resolve once there's been no mutation for `quietMs`, but never
+  // wait past `capMs` total, so a page with constant background chatter
+  // (spinners, ads, polling) can't hang playback forever.
+  function waitForQuiet(quietMs = 300, capMs = 4000) {
+    return new Promise(resolve => {
+      let settleTimer = null;
+      const hardCap = setTimeout(finish, capMs);
+      const observer = new MutationObserver(() => {
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(finish, quietMs);
+      });
+      function finish() {
+        clearTimeout(settleTimer);
+        clearTimeout(hardCap);
+        observer.disconnect();
+        resolve();
+      }
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      settleTimer = setTimeout(finish, quietMs);
+    });
+  }
+
+  // Beyond the DOM-settle wait, always give the viewer a fixed beat to
+  // register what just happened, even on a page that rendered instantly.
+  const POST_CLICK_SETTLE_MS = 500;
+
   async function exec(s, d) {
     if (s.action === 'caption') {
       caption(s.text || '');
@@ -225,6 +253,8 @@
       clickPulse(x, y);
       await sleep(120);
       realClick(x, y, el);
+      await waitForQuiet();
+      await sleep(POST_CLICK_SETTLE_MS);
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'type') {
       const { x, y, el } = await centerOf(s.selector);
@@ -232,6 +262,8 @@
       clickPulse(x, y);
       realClick(x, y, el);
       await typeInto(el, s.text, s.typeDelay ?? d.typeDelay, !!s.clear);
+      await waitForQuiet();
+      await sleep(POST_CLICK_SETTLE_MS);
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'hover') {
       const { x, y, el } = await centerOf(s.selector);
@@ -263,16 +295,23 @@
     }
   }
 
-  async function run(steps, defaults) {
+  // startIndex lets the background resume a segment after re-injecting this
+  // script post-navigation, instead of always restarting a segment from 0.
+  async function run(steps, defaults, startIndex) {
     if (running) return;
     running = true;
     ensure();
-    const d = Object.assign({ moveMs: 900, typeDelay: 55, pauseMs: 800 }, defaults || {});
+    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200 }, defaults || {});
     let label = '';
     try {
-      for (const [i, s] of (steps || []).entries()) {
+      for (let i = startIndex || 0; i < (steps || []).length; i++) {
+        const s = steps[i];
         label = 'step ' + (i + 1) + ' (' + s.action + (s.selector ? ' ' + s.selector : '') + ')';
         await exec(s, d);
+        // Fire-and-forget: if this step's click caused a full navigation, the
+        // page (and this call) is about to be torn down anyway, so a failed
+        // send here is expected and not an error worth surfacing.
+        chrome.runtime.sendMessage({ target: 'background', type: 'step-progress', index: i }).catch(() => {});
       }
       chrome.runtime.sendMessage({ target: 'background', type: 'segment-done' });
     } catch (e) {
@@ -284,7 +323,7 @@
   }
 
   chrome.runtime.onMessage.addListener(msg => {
-    if (msg?.type === 'run-steps') run(msg.steps, msg.defaults);
+    if (msg?.type === 'run-steps') run(msg.steps, msg.defaults, msg.startIndex);
     else if (msg?.type === 'clear-overlay') caption('');
   });
 })();

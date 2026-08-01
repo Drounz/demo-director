@@ -61,6 +61,27 @@ page shows a red error caption naming the failed step, the recording stops,
 and nothing is saved unless you'd already clicked Stop. Fix the flow and
 re-run, same as the Playwright tool: no half-finished takes.
 
+### Pacing and catching up with the page
+
+Defaults are `moveMs: 1300`, `pauseMs: 1200` — slow enough to actually follow
+on screen. After every click or type, playback also does two things before
+moving on: watches the page for DOM mutations and waits until it's been quiet
+for ~300ms (capped at 4s, so a page with constant background chatter can't
+hang things forever), then adds a fixed ~500ms beat on top regardless, so
+even an instantly-rendering page gives the viewer a moment to register what
+happened.
+
+### Recovering from an unexpected page reload
+
+If a click turns out to trigger a full page navigation rather than an in-app
+change — not something a flow generated from a single page scan can always
+predict — the extension detects it (a real navigation, not an SPA route
+change), re-injects itself on the new page, and resumes at the next step
+rather than dying silently. You'll see a status line like *"resumed at step 4
+after an unplanned reload."* If this happens more than 3 times in one
+recording, it gives up and fails loud instead: *"step caused a full page
+reload, playback stopped"* — so a broken take never looks like a hang.
+
 ## Flow schema
 
 Identical to the Playwright tool's `flow.json`, minus the fields that don't

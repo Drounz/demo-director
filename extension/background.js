@@ -4,8 +4,22 @@
 // goto plus the steps after it — a full-page navigation wipes the content
 // script, so the player is re-injected after every goto and the remaining
 // steps are replayed in-page.
+//
+// Within a segment, an UNPLANNED navigation can also happen mid-step — most
+// often because the step's own click triggered a full page load/reload
+// rather than an in-app SPA transition. tabs.onUpdated firing with
+// status:'loading' is a reliable signal for this (SPA route changes via the
+// History API never fire it), so it's watched for the whole time steps are
+// running, not just during our own deliberate goto. Content.js reports which
+// step index it has fully finished via 'step-progress' pings; if navigation
+// preempts one before its ping arrives, that step is assumed to be the one
+// that caused it (the dominant real-world case) and is treated as consumed —
+// recovery re-injects content.js on the new page and resumes at the next
+// step, up to MAX_NAV_RECOVERIES times before giving up and failing loud.
 
-let session = null;        // { tabId, flow, segments, seg }
+const MAX_NAV_RECOVERIES = 3;
+
+let session = null;        // { tabId, flow, segments, seg, ackIndex, expectingNav, recovering, navRecoveries }
 let pendingDownload = null;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -19,6 +33,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // User pressed Stop: keep whatever was recorded so far.
     setStatus('stopped — saving partial take');
     stopRecording(true);
+  } else if (msg.type === 'step-progress') {
+    if (session) session.ackIndex = msg.index;
   } else if (msg.type === 'segment-done') {
     nextSegment().catch(e => fail(e.message));
   } else if (msg.type === 'flow-error') {
@@ -29,6 +45,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // keepalive messages need no handling; receiving them resets the worker's
   // idle timer so it survives long recordings.
 });
+
+// Watches the recording tab for the whole session. Only acts when steps are
+// actually in flight (not during our own deliberate goto) and ignores
+// further loading events while a recovery is already underway, since a
+// redirect chain can fire status:'loading' more than once for what is really
+// a single navigation.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!session || tabId !== session.tabId) return;
+  if (session.expectingNav || session.recovering) return;
+  if (session.seg < 0 || session.seg >= session.segments.length) return; // not mid-segment (finishing/cooldown)
+  if (changeInfo.status !== 'loading' || !changeInfo.url) return;
+  handleUnplannedNavigation().catch(e => fail('navigation recovery failed: ' + e.message));
+});
+
+async function handleUnplannedNavigation() {
+  if (!session) return;
+  session.recovering = true;
+  session.navRecoveries += 1;
+  if (session.navRecoveries > MAX_NAV_RECOVERIES) {
+    throw new Error('step caused a full page reload, playback stopped (' + MAX_NAV_RECOVERIES + ' recoveries already attempted)');
+  }
+  const seg = session.segments[session.seg];
+  const resumeIndex = session.ackIndex + 2; // skip the step assumed to have caused the reload
+  await setStatus('page reload detected — reconnecting…');
+  await waitForLoad(session.tabId, 30000);
+  if (!session) return; // stopped while waiting
+  if (resumeIndex >= seg.steps.length) {
+    session.recovering = false;
+    return nextSegment().catch(e => fail(e.message));
+  }
+  await chrome.scripting.executeScript({ target: { tabId: session.tabId }, files: ['content.js'] });
+  if (!session) return;
+  session.recovering = false;
+  await setStatus('resumed at step ' + (resumeIndex + 1) + ' after an unplanned reload');
+  await chrome.tabs.sendMessage(session.tabId, {
+    type: 'run-steps',
+    steps: seg.steps,
+    defaults: session.flow.defaults || {},
+    startIndex: resumeIndex
+  });
+}
 
 async function start(flow) {
   if (session) throw new Error('a recording is already running');
@@ -43,7 +100,10 @@ async function start(flow) {
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'start-recording', streamId });
   if (!res?.ok) throw new Error(res?.error || 'recorder failed to start');
 
-  session = { tabId: tab.id, flow, segments: splitSegments(flow.steps || []), seg: -1 };
+  session = {
+    tabId: tab.id, flow, segments: splitSegments(flow.steps || []), seg: -1,
+    ackIndex: -1, expectingNav: false, recovering: false, navRecoveries: 0
+  };
   await setStatus('recording…');
   await nextSegment();
 }
@@ -68,15 +128,19 @@ function splitSegments(steps) {
 async function nextSegment() {
   if (!session) return;
   session.seg += 1;
+  session.ackIndex = -1;
+  session.navRecoveries = 0;
   if (session.seg >= session.segments.length) return finishFlow();
 
   const seg = session.segments[session.seg];
   if (seg.goto) {
+    session.expectingNav = true; // this navigation is ours; don't treat it as unplanned
     const url = /^https?:/i.test(seg.goto.url)
       ? seg.goto.url
       : (session.flow.baseUrl || '') + seg.goto.url;
     await chrome.tabs.update(session.tabId, { url });
     await waitForLoad(session.tabId, 30000);
+    if (session) session.expectingNav = false;
     await sleep(seg.goto.pauseMs ?? 600);
   }
   if (!session) return; // stopped while navigating
@@ -84,9 +148,12 @@ async function nextSegment() {
   await chrome.tabs.sendMessage(session.tabId, {
     type: 'run-steps',
     steps: seg.steps,
-    defaults: session.flow.defaults || {}
+    defaults: session.flow.defaults || {},
+    startIndex: 0
   });
   // Completion arrives as a 'segment-done' (or 'flow-error') runtime message.
+  // An unplanned mid-segment navigation is instead caught by the
+  // chrome.tabs.onUpdated listener above.
 }
 
 function waitForLoad(tabId, timeout) {
