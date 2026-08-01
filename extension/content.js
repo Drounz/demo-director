@@ -22,7 +22,7 @@
         #__demo_ripple{position:fixed;z-index:2147483646;pointer-events:none;width:14px;height:14px;border-radius:50%;border:2px solid rgba(59,130,246,.95);left:-999px;top:-999px}
         #__demo_ripple.go{animation:__demoR .5s ease-out}
         @keyframes __demoR{0%{opacity:.9;transform:translate(-50%,-50%) scale(.4)}100%{opacity:0;transform:translate(-50%,-50%) scale(2.6)}}
-        #__demo_caption{position:fixed;left:50%;bottom:7%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;max-width:78%;background:rgba(17,24,39,.92);color:#fff;font:500 18px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;padding:12px 20px;border-radius:12px;opacity:0;transition:opacity .3s ease;box-shadow:0 10px 34px rgba(0,0,0,.4)}
+        #__demo_caption{position:fixed;left:50%;bottom:9%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;max-width:82%;background:rgba(8,11,19,.97);color:#fff;font:700 27px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;padding:18px 30px;border-radius:14px;opacity:0;transition:opacity .3s ease;box-shadow:0 16px 48px rgba(0,0,0,.55),0 0 0 2px rgba(255,255,255,.14);text-shadow:0 1px 3px rgba(0,0,0,.5);text-align:center}
         #__demo_caption.show{opacity:1}
         #__demo_caption.error{background:rgba(153,27,27,.95)}
         .__demo_hl{outline:3px solid rgba(59,130,246,.95)!important;outline-offset:2px;border-radius:6px}
@@ -446,7 +446,13 @@
   // register what just happened, even on a page that rendered instantly.
   const POST_CLICK_SETTLE_MS = 500;
 
-  async function exec(s, d, index) {
+  // mode 'rehearse' is used only while the popup is generating a flow: it
+  // needs to actually click through to the next screen (e.g. open a modal)
+  // so a fresh page-scan can see what's really there, but it must not sit
+  // waiting on the interactive type-step UI (real-input detection, the
+  // auto-fill countdown) — that's only meaningful during an actual
+  // recording. In rehearse mode, 'type' just types the given text directly.
+  async function exec(s, d, index, mode) {
     if (s.action === 'caption') {
       caption(s.text || '');
       await sleep(s.ms ?? 2000);
@@ -460,6 +466,16 @@
       await sleep(POST_CLICK_SETTLE_MS);
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'type') {
+      if (mode === 'rehearse') {
+        const { x, y, el } = await centerOf(s.selector);
+        await moveCursor(x, y, s.moveMs ?? d.moveMs);
+        clickPulse(x, y);
+        realClick(x, y, el);
+        await typeInto(el, s.text, s.typeDelay ?? d.typeDelay, !!s.clear);
+        await waitForQuiet();
+        await sleep(s.pauseMs ?? d.pauseMs);
+        return;
+      }
       const result = await interactiveType(s, d);
       chrome.runtime.sendMessage({
         target: 'background', type: 'type-result', index,
@@ -512,7 +528,7 @@
       for (let i = startIndex || 0; i < (steps || []).length; i++) {
         const s = steps[i];
         label = 'step ' + (i + 1) + ' (' + s.action + (s.selector ? ' ' + s.selector : '') + ')';
-        await exec(s, d, i);
+        await exec(s, d, i, 'record');
         // Fire-and-forget: if this step's click caused a full navigation, the
         // page (and this call) is about to be torn down anyway, so a failed
         // send here is expected and not an error worth surfacing.
@@ -527,8 +543,31 @@
     }
   }
 
+  // Used only during generation (see popup.js): actually performs a stage's
+  // resolved click/type/etc. steps on the real page, live, so that if one of
+  // them opens a modal/panel, it is genuinely open by the time the popup
+  // re-scans for the next stage. Captions are skipped (nothing to act on);
+  // any failure is reported, never silently swallowed, so a bad rehearsal
+  // stage stops generation instead of quietly producing narration-only steps.
+  async function rehearse(steps, defaults) {
+    ensure();
+    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200 }, defaults || {});
+    const actionable = (steps || []).filter(s => s.action !== 'caption');
+    let label = '';
+    try {
+      for (const s of actionable) {
+        label = s.action + (s.selector ? ' ' + s.selector : '');
+        await exec(s, d, -1, 'rehearse');
+      }
+      chrome.runtime.sendMessage({ target: 'background', type: 'rehearse-done' });
+    } catch (e) {
+      chrome.runtime.sendMessage({ target: 'background', type: 'rehearse-error', error: label + ': ' + e.message });
+    }
+  }
+
   chrome.runtime.onMessage.addListener(msg => {
     if (msg?.type === 'run-steps') run(msg.steps, msg.defaults, msg.startIndex);
+    else if (msg?.type === 'rehearse-steps') rehearse(msg.steps, msg.defaults);
     else if (msg?.type === 'clear-overlay') caption('');
   });
 })();

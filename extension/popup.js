@@ -143,33 +143,48 @@ function collectElements() {
 // ------------------------------------------------------------- Gemini call
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-const RULES = `Output ONLY a single JSON object, no prose, no markdown fences, matching this shape:
-{ name, baseUrl, viewport?: {width,height}, defaults: {moveMs,typeDelay,pauseMs}, steps: [] }
+// A single upfront scan cannot see elements that only exist after an earlier
+// click in the SAME flow (a modal/panel that hasn't opened yet). Generation
+// is therefore staged: scan the current screen, ask Gemini only for what it
+// can ground on THAT screen, actually perform those steps live on the real
+// page (rehearseOnPage, below) so any modal it opens is genuinely open, then
+// re-scan and repeat. Each stage's model is explicitly told to stop rather
+// than narrate anything it can't ground yet — see STAGE_RULES.
+const STAGE_RULES = `You are generating ONE STAGE of a multi-stage flow spec, one screen at a time.
+Output ONLY a single JSON object, no prose, no markdown fences:
+{ steps: [...], continues: boolean, blocked?: boolean, reason?: string }
 
-Each step has an "action" of one of: caption {text, ms}, click {selector},
+Each step in "steps" has an "action" of one of: caption {text, ms}, click {selector},
 type {selector, text, clear?}, hover {selector}, highlight {selector, ms, keep?},
 scrollTo {selector}, wait {selector?, ms?, timeout?}, press {key}.
 
-You are given a JSON array called ELEMENTS: real interactive elements read
-directly from the page right now, each as {kind, tag, text, selector}. This is
-the ONLY source of selectors you may use.
+You are given: the full description of the flow the person wants, a summary of
+what earlier stages already did, and ELEMENTS — the real interactive elements
+that exist on the CURRENT screen right now, each as {kind, tag, text, selector}.
+This is the ONLY source of selectors you may use.
 
 Rules:
-- Every "selector" value you output must be copied EXACTLY, character for
-  character, from an element's "selector" field in ELEMENTS. Never invent,
-  edit, guess, or use a text=/role= selector.
-- Match the user's description to whichever ELEMENTS' "text" best fits what
-  they described. If no element plausibly matches part of the description,
-  leave that part out entirely rather than inventing a selector for it.
-- Do NOT include a "goto" step — the user is already on the correct page.
-- If the description says something appears later (after a click, after
-  loading, after processing), it will not be in ELEMENTS yet, since those were
-  captured before any action ran. For that step, use "wait" with only "ms" (a
-  fixed delay, e.g. 3000-8000ms depending on what's described) instead of a
-  selector — there is no real selector to confirm for it yet.
-- Put a short caption before each meaningful action so the recording narrates
-  itself.
-- Pace it slowly: moveMs around 900, pauseMs around 800, typeDelay around 55.`;
+- Only produce steps for description content you can ground in ELEMENTS right
+  now. Do NOT add a caption, or any step, for something the description
+  mentions that has no matching element yet — a modal or panel a click on
+  this screen opens is not visible to you yet and will be handled in a later
+  stage once it is genuinely open. Stop this stage's steps at the last thing
+  you can ground.
+- Every "selector" value must be copied EXACTLY, character for character, from
+  an element's "selector" field in ELEMENTS. Never invent, edit, guess, or use
+  a text=/role= selector.
+- Do NOT include a "goto" step.
+- Put a short caption before each meaningful action IN THIS STAGE only —
+  never a caption for something you're deferring.
+- Pace it slowly: moveMs around 1300, pauseMs around 1200, typeDelay around 55.
+- Set "continues": true if the description has more to accomplish that you
+  expect a screen opened by one of this stage's clicks will make possible.
+  Set it false once the description is fully satisfied by this stage plus
+  everything already done before it.
+- If you cannot ground any further part of the description in the current
+  ELEMENTS, and don't expect a click here to reveal it either, return
+  "steps": [], "continues": false, "blocked": true, and a short "reason" —
+  never guess or narrate it instead.`;
 
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -181,9 +196,9 @@ const ALLOWED_ACTIONS = new Set(['caption', 'click', 'type', 'hover', 'highlight
 // Defense in depth: even though the prompt instructs Gemini to only copy
 // selectors from ELEMENTS, this strips any step whose selector isn't actually
 // in that set, so a model slip-up can never reintroduce a guessed selector.
-function enforceRealSelectors(flow, knownSelectors) {
+function enforceRealSelectors(steps, knownSelectors) {
   const dropped = [];
-  flow.steps = (flow.steps || []).filter((s, i) => {
+  const kept = (steps || []).filter((s, i) => {
     if (s.action === 'goto') { dropped.push(`step ${i + 1}: goto (not supported here)`); return false; }
     if (!ALLOWED_ACTIONS.has(s.action)) { dropped.push(`step ${i + 1}: unknown action "${s.action}"`); return false; }
     if (s.selector && !knownSelectors.has(s.selector)) {
@@ -192,7 +207,7 @@ function enforceRealSelectors(flow, knownSelectors) {
     }
     return true;
   });
-  return dropped;
+  return { kept, dropped };
 }
 
 function renderShotList(flow) {
@@ -209,6 +224,58 @@ function renderShotList(flow) {
   shotListEl.hidden = (flow.steps || []).length === 0;
 }
 
+async function scanPage(tabId) {
+  const [{ result: elements }] = await chrome.scripting.executeScript({ target: { tabId }, func: collectElements });
+  return elements || [];
+}
+
+async function callGeminiStage(apiKey, description, doneSummary, elements) {
+  const userPrompt = `Full description of the desired flow:\n${description}\n\nWhat earlier stages already did:\n${doneSummary}\n\nELEMENTS on the current screen:\n${JSON.stringify(elements)}`;
+  const res = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: STAGE_RULES }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 }
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const raw = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+  try {
+    return JSON.parse(extractJson(raw));
+  } catch {
+    throw new Error('Gemini reply was not valid JSON');
+  }
+}
+
+// Actually performs a stage's resolved steps on the live page (re-injecting
+// content.js first, since a prior stage may have navigated), so anything they
+// open is genuinely open before the next scan. Rejects — never silently
+// swallows — if a step can't be completed, since a bad rehearsal means the
+// next stage's scan would be grounded on a page state that was never reached.
+function rehearseOnPage(tabId, steps, defaults) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error('rehearsal timed out after 30s')); }, 30000);
+    function listener(msg) {
+      if (msg?.type === 'rehearse-done') { cleanup(); resolve(); }
+      else if (msg?.type === 'rehearse-error') { cleanup(); reject(new Error(msg.error)); }
+    }
+    function cleanup() { clearTimeout(timer); chrome.runtime.onMessage.removeListener(listener); }
+    chrome.runtime.onMessage.addListener(listener);
+    chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] })
+      .then(() => chrome.tabs.sendMessage(tabId, { type: 'rehearse-steps', steps, defaults }))
+      .catch(e => { cleanup(); reject(e); });
+  });
+}
+
+const MAX_STAGES = 6;
+const REHEARSAL_DEFAULTS = { moveMs: 300, typeDelay: 20, pauseMs: 200 }; // fast: this isn't the recording
+
 generateBtn.addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
   const description = descriptionEl.value.trim();
@@ -216,64 +283,77 @@ generateBtn.addEventListener('click', async () => {
   if (!description) { showGenStatus('Describe the flow first.', 'error'); return; }
 
   generateBtn.disabled = true;
-  showGenStatus('Reading the page…');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !/^https?:/i.test(tab.url || '')) {
       throw new Error('open the target app tab first (cannot scan chrome:// pages)');
     }
 
-    const [{ result: elements }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: collectElements
-    });
-    if (!elements || !elements.length) {
-      throw new Error('found no visible buttons, links, inputs, or headings on this page');
+    const allSteps = [];
+    const allDropped = [];
+    let doneSummary = '(nothing yet — this is the first stage)';
+    let blockedReason = null;
+    let stage = 0;
+
+    while (stage < MAX_STAGES) {
+      stage++;
+      showGenStatus(`Stage ${stage}: reading the page…`);
+      const elements = await scanPage(tab.id);
+      if (!elements.length) throw new Error(`stage ${stage}: found no visible buttons, links, inputs, or headings on this page`);
+
+      showGenStatus(`Stage ${stage}: found ${elements.length} elements. Asking Gemini…`);
+      const stageResult = await callGeminiStage(apiKey, description, doneSummary, elements);
+
+      const knownSelectors = new Set(elements.map(e => e.selector));
+      const { kept, dropped } = enforceRealSelectors(stageResult.steps, knownSelectors);
+      allDropped.push(...dropped.map(d => `stage ${stage} ${d}`));
+
+      if (stageResult.blocked) {
+        blockedReason = stageResult.reason || 'could not find a next action for the rest of the description';
+        allSteps.push(...kept);
+        break;
+      }
+      if (!kept.length) break; // nothing new and not continuing: done
+
+      allSteps.push(...kept);
+      doneSummary += `\nStage ${stage}: ` + kept.map(s => s.action === 'caption' ? `"${s.text}"` : `${s.action} ${s.selector || ''}`).join('; ');
+
+      // Deliberately not rehearsed if this is the final stage: rehearsal's
+      // only job is to reveal the next screen for the next scan, and there
+      // is no next stage here. Actually performing a flow's last action
+      // (often something consequential like Save/Submit) during mere
+      // generation would fire it silently now AND again during the real
+      // recording later — this stops at validating it's grounded in a real
+      // selector, without executing it a second time.
+      if (!stageResult.continues) break;
+
+      showGenStatus(`Stage ${stage}: performing these steps on the page so the next screen can be read…`);
+      await rehearseOnPage(tab.id, kept, REHEARSAL_DEFAULTS);
     }
 
-    showGenStatus(`Found ${elements.length} elements. Asking Gemini…`);
-    const userPrompt = `App name: my-demo\nBase URL: ${tab.url}\n\nHere is the flow:\n${description}\n\nELEMENTS:\n${JSON.stringify(elements)}`;
-
-    const res = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: RULES }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 }
-      })
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`);
-    }
-    const data = await res.json();
-    const raw = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
-
-    let flow;
-    try {
-      flow = JSON.parse(extractJson(raw));
-    } catch {
-      throw new Error('Gemini reply was not valid JSON');
-    }
-
-    flow.name = flow.name || 'my-demo';
-    flow.baseUrl = tab.url;
-    flow.defaults = Object.assign({ moveMs: 900, typeDelay: 55, pauseMs: 800 }, flow.defaults || {});
-
-    const knownSelectors = new Set(elements.map(e => e.selector));
-    const dropped = enforceRealSelectors(flow, knownSelectors);
-
+    const flow = {
+      name: 'my-demo',
+      baseUrl: tab.url,
+      defaults: { moveMs: 1300, typeDelay: 55, pauseMs: 1200 },
+      steps: allSteps
+    };
     flowBox.value = JSON.stringify(flow, null, 2);
     await chrome.storage.local.set({ flowText: flowBox.value });
     renderShotList(flow);
 
-    if (!flow.steps.length) {
+    if (blockedReason) {
+      // Checked first, ahead of the generic empty-steps message below: a
+      // specific reason is always more useful than "no usable steps", even
+      // when zero steps were also collected (blocked on the very first stage).
+      showGenStatus(`Generated ${flow.steps.length} steps across ${stage} stage(s), then stopped: ${blockedReason}. Nothing was narrated in place of a real action — add the missing part manually below, or rephrase and regenerate.`, 'error');
+    } else if (!flow.steps.length) {
       showGenStatus('Generated, but no usable steps came back — try rephrasing.', 'error');
-    } else if (dropped.length) {
-      showGenStatus(`Generated ${flow.steps.length} steps. Dropped ${dropped.length} unusable: ${dropped.join('; ')}`, 'error');
+    } else if (allDropped.length) {
+      showGenStatus(`Generated ${flow.steps.length} steps across ${stage} stage(s). Dropped ${allDropped.length} unusable: ${allDropped.join('; ')}`, 'error');
+    } else if (stage >= MAX_STAGES) {
+      showGenStatus(`Generated ${flow.steps.length} steps but hit the ${MAX_STAGES}-stage limit — the flow may be incomplete. Review below.`, 'error');
     } else {
-      showGenStatus(`Generated ${flow.steps.length} steps, all from real elements on this page. Review below, then Record.`, 'ok');
+      showGenStatus(`Generated ${flow.steps.length} steps across ${stage} stage(s), all from real elements. Review below, then Record.`, 'ok');
     }
   } catch (e) {
     showGenStatus('Failed: ' + e.message, 'error');
