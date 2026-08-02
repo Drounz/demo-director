@@ -2,9 +2,9 @@
   "name": "my-demo",
   "baseUrl": "https://your-app-address-here",
   "viewport": { "width": 1280, "height": 720 },
-  "defaults": { "moveMs": 900, "typeDelay": 55, "pauseMs": 800 },
+  "defaults": { "moveMs": 1300, "typeDelay": 55, "pauseMs": 1200, "zoomEnabled": true, "zoomScale": 1.6, "zoomHoldMs": 700 },
 
-  "_comment": "Same schema as the Playwright tool's flow.json, minus storageState/headless/outDir (this player runs in your own logged-in tab and downloads via chrome.downloads, so none of those apply). Only the FIRST step may be a goto — after that, stay on the same page and drive it with in-app clicks, since a full-page navigation reloads the tab and drops the injected content script. Replace baseUrl and every selector below with real ones from your app.",
+  "_comment": "Same schema as the Playwright tool's flow.json, minus storageState/headless/outDir (this player runs in your own logged-in tab and downloads via chrome.downloads, so none of those apply). Only the FIRST step may be a goto — after that, stay on the same page and drive it with in-app clicks, since a full-page navigation reloads the tab and drops the injected content script. Replace baseUrl and every selector below with real ones from your app. Every click (and the click-into-field moment of every type) auto-zooms in on the clicked element per zoomEnabled/zoomScale/zoomHoldMs above; set a per-step \"zoom\": false to skip it — e.g. the Save click below, which is immediately followed by its own highlight on a different element, so its own zoom would just be extra motion.",
 
   "steps": [
     { "action": "goto", "url": "/" },
@@ -13,7 +13,7 @@
     { "action": "caption", "text": "We start by creating a new record.", "ms": 2200 },
     { "action": "click", "selector": "text=New" },
     { "action": "type", "selector": "input[name='name']", "text": "Example record" },
-    { "action": "click", "selector": "text=Save" },
+    { "action": "click", "selector": "text=Save", "zoom": false },
 
     { "action": "caption", "text": "The app processes it in the background.", "ms": 2600 },
     { "action": "wait", "selector": "text=Ready", "timeout": 30000 },

@@ -71,6 +71,26 @@ hang things forever), then adds a fixed ~500ms beat on top regardless, so
 even an instantly-rendering page gives the viewer a moment to register what
 happened.
 
+### Auto-zoom on click
+
+After the click ripple and the page settling, every click (and the
+click-into-field moment of every type step) smoothly scales the page in on
+the clicked element — centered, enlarged, held briefly, then eased back out —
+before moving to the next step. Controlled via `defaults`:
+`zoomEnabled` (default `true`), `zoomScale` (default `1.6`), `zoomHoldMs`
+(default `700`). Set `"zoom": false` on any individual `click` or `type` step
+to skip it there — useful right before a `highlight` on the same or a nearby
+element, where a second zoom effect would just be redundant motion.
+
+It's a pure CSS transform on the page itself, not a resize — real layout,
+sizes, and anything the site's own code measures are untouched outside the
+brief window the transform is actually active. The cursor, ripple, caption,
+and the type-step prompt all live outside the transform's scope and stay
+pinned to the real viewport throughout, so they're never clipped, distorted,
+or dragged along with the zoom. A site's own `position: fixed` content (a
+modal, say) *does* zoom with everything else, which is intentional — it's
+part of what's genuinely on screen at that point.
+
 ### Recovering from an unexpected page reload
 
 If a click turns out to trigger a full page navigation rather than an in-app

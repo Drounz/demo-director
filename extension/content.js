@@ -11,7 +11,12 @@
 
   function ensure() {
     if (state.ready && document.getElementById('__demo_cursor')) return;
-    const root = document.body || document.documentElement;
+    // Deliberately documentElement, not body: the zoom effect (below)
+    // applies a CSS transform to document.body, and position:fixed elements
+    // whose nearest transformed ancestor is that body would get dragged
+    // along with it. Living on <html> instead keeps the cursor, ripple,
+    // caption, and prompt genuinely pinned to the real viewport regardless.
+    const root = document.documentElement;
 
     if (!document.getElementById('__demo_style')) {
       const st = document.createElement('style');
@@ -391,6 +396,12 @@
     clickPulse(x, y);
     realClick(x, y, el);
 
+    // Same click-into-field zoom as a plain click, before the interactive
+    // wait (typing prompt / auto-fill countdown) takes over.
+    if (s.zoom !== false && d.zoomEnabled) {
+      await zoomToElement(el, d.zoomScale, d.zoomHoldMs);
+    }
+
     const sensitive = isSensitiveField(el);
     const result = await waitForFieldValue(el, sensitive);
 
@@ -446,6 +457,50 @@
   // register what just happened, even on a page that rendered instantly.
   const POST_CLICK_SETTLE_MS = 500;
 
+  // "Ken burns" zoom on click: transforms document.body so the clicked
+  // element visually centers and enlarges for a beat, then eases back. Pure
+  // CSS transform — no width/height/font-size changes, so the page's real
+  // layout, and anything the site's own JS measures via
+  // getBoundingClientRect while NOT mid-zoom, is untouched. (While actively
+  // zoomed, the site's own measurements would reflect the transformed
+  // geometry too, same as any DOM-level zoom effect — the tradeoff is
+  // inherent to doing this without a video-compositing layer, which a
+  // browser extension doesn't have access to.) Overlay elements live outside
+  // body (see ensure(), above) specifically so they never get swept into
+  // this transform. A site's own position:fixed content (inside body — a
+  // modal, say) DOES zoom along with everything else, which is the correct
+  // visual outcome: it's part of what's genuinely on screen.
+  const ZOOM_TRANSITION_MS = 450;
+  const ZOOM_EASE = 'cubic-bezier(0.45, 0, 0.55, 1)'; // matches the cursor's easeInOutQuad feel
+
+  async function zoomToElement(el, scale, holdMs) {
+    const r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return; // vanished/hidden after the click: skip rather than zoom into nothing
+
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const vx = window.innerWidth / 2;
+    const vy = window.innerHeight / 2;
+
+    // transform-origin is anchored at the clicked element's own position
+    // (its viewport-relative center converted to body's document-space
+    // coordinates by adding the current scroll offset), not the page's
+    // top-left. Scaling around a point never moves that point, so with the
+    // origin set there, a plain translate from the element's current screen
+    // position to viewport center is all that's needed — correct at any
+    // scroll position, with no separate scroll correction term to get wrong.
+    document.body.style.transformOrigin = `${cx + window.scrollX}px ${cy + window.scrollY}px`;
+    document.body.style.transitionProperty = 'transform';
+    document.body.style.transitionDuration = ZOOM_TRANSITION_MS + 'ms';
+    document.body.style.transitionTimingFunction = ZOOM_EASE;
+
+    document.body.style.transform = `translate(${vx - cx}px, ${vy - cy}px) scale(${scale})`;
+    await sleep(ZOOM_TRANSITION_MS);
+    await sleep(holdMs);
+    document.body.style.transform = 'none';
+    await sleep(ZOOM_TRANSITION_MS);
+  }
+
   // mode 'rehearse' is used only while the popup is generating a flow: it
   // needs to actually click through to the next screen (e.g. open a modal)
   // so a fresh page-scan can see what's really there, but it must not sit
@@ -463,6 +518,12 @@
       await sleep(120);
       realClick(x, y, el);
       await waitForQuiet();
+      // Zoom into the click's settled result, not a still-updating DOM — and
+      // never during rehearsal, which is a fast functional dry run during
+      // generation, not the cinematic recording this effect is for.
+      if (mode !== 'rehearse' && s.zoom !== false && d.zoomEnabled) {
+        await zoomToElement(el, d.zoomScale, d.zoomHoldMs);
+      }
       await sleep(POST_CLICK_SETTLE_MS);
       await sleep(s.pauseMs ?? d.pauseMs);
     } else if (s.action === 'type') {
@@ -522,7 +583,7 @@
     if (running) return;
     running = true;
     ensure();
-    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200 }, defaults || {});
+    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200, zoomEnabled: true, zoomScale: 1.6, zoomHoldMs: 700 }, defaults || {});
     let label = '';
     try {
       for (let i = startIndex || 0; i < (steps || []).length; i++) {
@@ -551,7 +612,7 @@
   // stage stops generation instead of quietly producing narration-only steps.
   async function rehearse(steps, defaults) {
     ensure();
-    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200 }, defaults || {});
+    const d = Object.assign({ moveMs: 1300, typeDelay: 55, pauseMs: 1200, zoomEnabled: true, zoomScale: 1.6, zoomHoldMs: 700 }, defaults || {});
     const actionable = (steps || []).filter(s => s.action !== 'caption');
     let label = '';
     try {
